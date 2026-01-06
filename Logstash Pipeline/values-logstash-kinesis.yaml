@@ -1,0 +1,137 @@
+image:
+  repository: garjunan/logstash
+  tag: 7.6.2
+  pullPolicy: Always
+
+persistence:
+  enabled: true
+  size: 2Gi
+
+config:
+  dead_letter_queue.enable: true
+
+podDisruptionBudget:
+  maxUnavailable: 0
+
+livenessProbe:
+  initialDelaySeconds: 90
+
+
+extraEnv: 
+- name: ELASTIC_USERNAME
+  value: elastic  
+- name: ELASTIC_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      key: elastic
+      name: poc-elasticsearch-es-elastic-user
+
+volumeMounts:
+- name: cacert
+  mountPath: /etc/es-cacert/
+- name: data
+  mountPath: /usr/share/logstash/data
+- name: patterns
+  mountPath: /usr/share/logstash/patterns
+- name: files
+  mountPath: /usr/share/logstash/files
+- name: pipeline
+  mountPath: /usr/share/logstash/pipeline
+
+volumes: 
+- name: cacert
+  secret:
+    secretName: poc-elasticsearch-es-http-certs-public
+
+inputs:
+  main: |-
+    input {
+      kinesis {
+        kinesis_stream_name => "lamm-dev-poc-stream"
+        codec => json { }
+        region => "us-west-2"
+        application_name => "lamm-dev-siem-elk"
+      }
+    }
+
+
+filters:
+  main: |-
+    filter {
+     }
+
+filters:
+  main: |-
+    filter {
+      if [kubernetes][namespace_name] =~ /elk-cluster/ {
+        mutate {
+          add_field => { "[@metadata][index_prefix]" => "elk-cluster" }
+        }
+     }
+
+      if [kubernetes][namespace_name] =~ /elastic-system/ {
+        mutate {
+          add_field => { "[@metadata][index_prefix]" => "elastic-system" }
+        }
+      }
+
+      if [kubernetes][namespace_name] =~ /lamm/ {
+        mutate {
+          add_field => { "[@metadata][index_prefix]" => "lamm" }
+        }
+      }
+      if [kubernetes][namespace_name] =~ /argocd/ {
+        mutate {
+          add_field => { "[@metadata][index_prefix]" => "argocd" }
+        }
+        grok {
+         
+        keep_empty_captures => true
+         
+        match => { "message" => "\"%{TIMESTAMP_ISO8601:time}\"\slevel=(?<level>\w*)\smsg=(?<msg>.*)\sgrpc.code=(?<grpc.code>\w*)\sgrpc.method=(?<grpc.method>\w*)\sgrpc.request.deadline=\"%{TIMESTAMP_ISO8601:grpcrequestdeadline}\"\sgrpc.service=(?<grpc.service>[\w\.]+)\sgrpc.start_time=\"%{TIMESTAMP_ISO8601:grpcstart_time}\"\sgrpc.time_ms=(?<grpc.time_ms>.*)\sspan.kind=(?<span.kind>[\w\.]+)\ssystem=(?<system>\w*)"}
+        match => { "message" => "\"%{TIMESTAMP_ISO8601:time}\"\slevel=(?<level>\w*)\smsg=(?<msg>.*)"}
+        }
+        if "_grokparsefailure" in [tags] {
+            drop {}
+        }
+        mutate {
+            gsub => [
+                "msg", "\"",""
+            ]
+        } 
+        mutate {  
+          remove_field => "message"
+        }
+        mutate {
+            rename => ["msg", "message"]
+        }
+       } 
+
+
+      if [kubernetes][namespace_name] =~ /argotest-deploy/ {
+        mutate {
+          add_field => { "[@metadata][index_prefix]" => "argotest-deploy" }
+        }
+      }
+    }
+
+
+
+outputs:
+  main: |-
+    output {
+      stdout { codec => rubydebug { metadata => true } }
+      elasticsearch {
+         hosts => "poc-elasticsearch-es-http:9200"
+         ssl => true
+         ssl_certificate_verification => false
+         cacert => "/etc/es-cacert/ca.crt"
+         user => "${ELASTIC_USERNAME}"
+         password => "${ELASTIC_PASSWORD}"
+         manage_template => false
+         #index => "poc-elk-fluent-%{+YYYY.MM.dd}"
+         index => "poc-elk-ns-%{[@metadata][index_prefix]}-%{+YYYY.MM.dd}"
+         #index => "poc-elk-fluent-%{[@metadata][index_prefix]}-%{+YYYY.MM.dd}"
+      }
+    }
+

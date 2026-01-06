@@ -1,0 +1,331 @@
+image:
+  repository: garjunan/logstash-oss
+  tag: 7.6.2
+  pullPolicy: Always
+persistence:
+  enabled: true
+  size: 2Gi
+config:
+  dead_letter_queue.enable: true
+podDisruptionBudget:
+  maxUnavailable: 0
+livenessProbe:
+  initialDelaySeconds: 90
+extraEnv:
+  - name: ELASTIC_USERNAME
+    value: elastic
+  - name: ELASTIC_PASSWORD
+    valueFrom:
+      secretKeyRef:
+        key: elastic
+        name: poc-elasticsearch-es-elastic-user
+volumeMounts:
+  - name: cacert
+    mountPath: /etc/es-cacert/
+  - name: data
+    mountPath: /usr/share/logstash/data
+  - name: patterns
+    mountPath: /usr/share/logstash/patterns
+  - name: files
+    mountPath: /usr/share/logstash/files
+  - name: pipeline
+    mountPath: /usr/share/logstash/pipeline
+volumes:
+  - name: cacert
+    secret:
+      secretName: poc-elasticsearch-es-http-certs-public
+inputs:
+  main: |-
+    input {
+      kinesis {
+        kinesis_stream_name => "lamm-dev-k8s-cw-poc-stream"
+        codec => cloudwatch_logs
+        region => "us-west-2"
+        application_name => "lamm-dev-siem-elk-cwl"
+      }
+    }
+filters:
+  main: |-
+    filter {
+      if [logStream] =~ /kube-apiserver-audit-.*/ {
+        mutate {
+          add_field => { "[@metadata][index_prefix]" => "k8-kube-apiserver-audit" }
+        }
+      }
+
+      if [logStream] =~ /kube-apiserver-(?!audit).*/ {
+        mutate {
+          add_field => { "[@metadata][index_prefix]" => "k8-kubeapiserver" }
+        }
+        grok {
+        match => {"message" =>"%{DATA:loglevel}%{TIME:timestamp}%{SPACE}%{NUMBER:version}%{SPACE}%{JAVACLASS:class}:%{NUMBER:bytes}%{GREEDYDATA:message}"}
+        }
+
+        mutate {
+          add_field => {"[logtime]" => "%{loglevel}"}
+        }
+     
+        mutate {
+            gsub => [
+                "message", "\r","",
+                "message", "]",""
+            ]
+        }
+     
+        mutate {
+
+            split => ["logtime" , ""]
+            add_field => ["loglevel_0", "%{[logtime][0]}" ]
+            add_field => ["loglevel_1", "%{[logtime][1]}" ]
+            add_field => ["loglevel_2", "%{[logtime][2]}" ]
+            add_field => ["loglevel_3", "%{[logtime][3]}" ]
+            add_field => ["loglevel_4", "%{[logtime][4]}" ]
+            remove_field => "[logtime]"
+        }
+     
+        if [loglevel_0] =~ "I"
+        {
+        mutate {
+                replace => { "loglevel" => "INFO" }
+               }
+        }
+        else if [loglevel_0] =~ "E"  {
+        mutate {
+               replace => { "loglevel" => "ERROR" }
+               }
+        }
+        else if [loglevel_0] =~ "W"  {
+        mutate {
+               replace => { "loglevel" => "WARNING" }
+               }
+        }
+        mutate {
+            add_field => {
+                   "event.month" => "%{loglevel_1}%{loglevel_2}"
+                   "event.day" => "%{loglevel_3}%{loglevel_4}"
+            }
+            remove_field => "[loglevel_0]"
+            remove_field => "[loglevel_1]"
+            remove_field => "[loglevel_2]"
+            remove_field => "[loglevel_3]"
+            remove_field => "[loglevel_4]" 
+            remove_field => "[message]"
+        }
+
+        mutate {
+           rename => ["message", "event.message" ]
+           rename => ["class", "apiname" ]
+           rename => ["version", "apiversion" ]
+           rename => ["bytes", "bytes" ]
+           rename => ["timestamp", "event.time" ]
+        }
+
+        mutate {
+            convert => {
+               "bytes" => "integer" 
+               "event.month" => "integer"
+               "event.day" => "integer"
+               "apiversion" => "integer"
+            }
+        }
+      }
+
+
+      if [logStream] =~ /kube-controller-manager-.*/ {
+        mutate {
+          add_field => { "[@metadata][index_prefix]" => "k8-kube-controller-manager" }
+        }
+        grok {
+        match => {"message" =>"%{DATA:loglevel}%{TIME:timestamp}%{SPACE}%{NUMBER:version}%{SPACE}%{JAVACLASS:class}:%{NUMBER:bytes}%{GREEDYDATA:message}"}
+        }
+
+        mutate {
+          add_field => {"[logtime]" => "%{loglevel}"}
+        }
+     
+        mutate {
+            gsub => [
+                "message", "\r","",
+                "message", "]",""
+            ]
+        }
+     
+        mutate {
+
+            split => ["logtime" , ""]
+            add_field => ["loglevel_0", "%{[logtime][0]}" ]
+            add_field => ["loglevel_1", "%{[logtime][1]}" ]
+            add_field => ["loglevel_2", "%{[logtime][2]}" ]
+            add_field => ["loglevel_3", "%{[logtime][3]}" ]
+            add_field => ["loglevel_4", "%{[logtime][4]}" ]
+            remove_field => "[logtime]"
+        }
+     
+        if [loglevel_0] =~ "I"
+        {
+        mutate {
+                replace => { "loglevel" => "INFO" }
+               }
+        }
+        else if [loglevel_0] =~ "E"  {
+        mutate {
+               replace => { "loglevel" => "ERROR" }
+               }
+        }
+        else if [loglevel_0] =~ "W"  {
+        mutate {
+               replace => { "loglevel" => "WARNING" }
+               }
+        }
+        mutate {
+            add_field => {
+                   "event.month" => "%{loglevel_1}%{loglevel_2}"
+                   "event.day" => "%{loglevel_3}%{loglevel_4}"
+            }
+            remove_field => "[loglevel_0]"
+            remove_field => "[loglevel_1]"
+            remove_field => "[loglevel_2]"
+            remove_field => "[loglevel_3]"
+            remove_field => "[loglevel_4]" 
+            remove_field => "[message]"
+        }
+
+        mutate {
+           rename => ["message", "event.message" ]
+           rename => ["class", "apiname" ]
+           rename => ["version", "apiversion" ]
+           rename => ["bytes", "bytes" ]
+           rename => ["timestamp", "event.time" ]
+        }
+
+        mutate {
+            convert => {
+               "bytes" => "integer" 
+               "event.month" => "integer"
+               "event.day" => "integer"
+               "apiversion" => "integer"
+            }
+        }
+      }
+
+
+      if [logStream] =~ /kube-scheduler-.*/ {
+        mutate {
+          add_field => { "[@metadata][index_prefix]" => "k8-kube-scheduler" }
+        }
+        grok {
+        match => {"message" =>"%{DATA:loglevel}%{TIME:timestamp}%{SPACE}%{NUMBER:version}%{SPACE}%{JAVACLASS:class}:%{NUMBER:bytes}%{GREEDYDATA:message}"}
+        }
+
+        mutate {
+          add_field => {"[logtime]" => "%{loglevel}"}
+        }
+     
+        mutate {
+            gsub => [
+                "message", "\r","",
+                "message", "]",""
+            ]
+        }
+     
+        mutate {
+
+            split => ["logtime" , ""]
+            add_field => ["loglevel_0", "%{[logtime][0]}" ]
+            add_field => ["loglevel_1", "%{[logtime][1]}" ]
+            add_field => ["loglevel_2", "%{[logtime][2]}" ]
+            add_field => ["loglevel_3", "%{[logtime][3]}" ]
+            add_field => ["loglevel_4", "%{[logtime][4]}" ]
+            remove_field => "[logtime]"
+        }
+     
+        if [loglevel_0] =~ "I"
+        {
+        mutate {
+                replace => { "loglevel" => "INFO" }
+               }
+        }
+        else if [loglevel_0] =~ "E"  {
+        mutate {
+               replace => { "loglevel" => "ERROR" }
+               }
+        }
+        else if [loglevel_0] =~ "W"  {
+        mutate {
+               replace => { "loglevel" => "WARNING" }
+               }
+        }
+        mutate {
+            add_field => {
+                   "event.month" => "%{loglevel_1}%{loglevel_2}"
+                   "event.day" => "%{loglevel_3}%{loglevel_4}"
+            }
+            remove_field => "[loglevel_0]"
+            remove_field => "[loglevel_1]"
+            remove_field => "[loglevel_2]"
+            remove_field => "[loglevel_3]"
+            remove_field => "[loglevel_4]" 
+            remove_field => "[message]"
+        }
+
+        mutate {
+           rename => ["message", "event.message" ]
+           rename => ["class", "apiname" ]
+           rename => ["version", "apiversion" ]
+           rename => ["bytes", "bytes" ]
+           rename => ["timestamp", "event.time" ]
+        }
+
+        mutate {
+            convert => {
+               "bytes" => "integer" 
+               "event.month" => "integer"
+               "event.day" => "integer"
+               "apiversion" => "integer"
+            }
+        }
+      }
+
+      if [logStream] =~ /authenticator-.*/ {
+        mutate {
+          add_field => { "[@metadata][index_prefix]" => "k8-authenticator" }
+        }
+        grok {
+
+              match => { "message" => "time=\"%{TIMESTAMP_ISO8601:timestamp}\" level=%{LOGLEVEL:loglevel} msg=\"%{DATA:msg}\" accesskeyid=%{DATA:accesskey} accountid=%{DATA:accountid} arn=\"%{DATA:role}\" client=\"%{IP:clientip}:%{POSINT:clientport}\" method=%{WORD:method} path=%{NOTSPACE:request} session=%{DATA:instanceid} userid=%{GREEDYDATA:userid}" }
+              match => { "message" => "time=\"%{TIMESTAMP_ISO8601:timestamp}\" level=%{LOGLEVEL:loglevel} msg=\"%{DATA:msg}\" arn=\"%{DATA:role}\" client=\"%{IP:clientip}:%{POSINT:clientport}\" groups=\"%{DATA:group}\" method=%{WORD:method} path=%{NOTSPACE:request} uid=\"%{DATA:userid}\" username=\"%{DATA:node}\"" }
+
+        }
+        if "_grokparsefailure" in [tags] {
+                drop {}
+        }
+        mutate {
+            gsub => [
+                    "request", "/",""
+            ]
+        }
+        mutate {
+                rename => ["timestamp", "event.timestamp" ]
+                rename => ["loglevel", "loglevel" ]
+                rename => ["msg", "message" ]
+                rename => ["group", "node.group" ]
+             }
+        }
+      }
+outputs:
+  main: |-
+    output {
+      stdout { codec => rubydebug { metadata => true } }
+      elasticsearch {
+         hosts => "poc-elasticsearch-es-http:9200"
+         ssl => true
+         ssl_certificate_verification => false
+         cacert => "/etc/es-cacert/ca.crt"
+         user => "${ELASTIC_USERNAME}"
+         password => "${ELASTIC_PASSWORD}"
+         manage_template => false
+         #index => "poc-elk-kinesis-cloudwatch-%{+YYYY.MM.dd}"
+         index => "poc-elk-kinesis-cw-%{[@metadata][index_prefix]}-%{+YYYY.MM.dd}"
+      }
+    }
+
